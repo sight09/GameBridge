@@ -13,7 +13,7 @@ from app.config import settings
 from app.database import get_db, engine, AsyncSessionLocal
 from app.database_init import init_db
 from app.models.user import User, UserPreference
-from app.models.tournament import Tournament, TournamentParticipant
+from app.models.tournament import Tournament, TournamentParticipant, TournamentQualificationPath
 from app.models.match import Match, MatchResultEvent, MatchEvidence
 from app.models.game import GameAccount
 from app.models.ratings import PlatformRating
@@ -24,7 +24,12 @@ from app.services.analytics_service import AnalyticsService
 from app.services.card_generator import generate_player_share_card
 from app.services.demo_service import DemoService
 from app.localization.i18n import t
-from app.auth.dependencies import get_current_user_optional, require_captain, get_managed_hub_ids
+from app.auth.dependencies import (
+    get_current_user_optional,
+    get_managed_hub_ids,
+    require_captain,
+    user_manages_hub,
+)
 from app.utils.logger import logger
 
 # Import API Routers
@@ -44,6 +49,7 @@ async def lifespan(app: FastAPI):
     # Auto-seed initial demo dataset if running in demo mode and database is fresh
     if settings.DEMO_MODE:
         async with AsyncSessionLocal() as session:
+            await DemoService.remove_demo_captain_review_fixture(session)
             stmt = select(Tournament).where(Tournament.is_demo == True)
             existing = (await session.execute(stmt)).first()
             if not existing:
@@ -297,6 +303,67 @@ async def page_tournament_detail(
     m_stmt = select(Match).where(Match.tournament_id == tourney.id).order_by(Match.round_number, Match.match_number)
     matches = (await db.execute(m_stmt)).scalars().all()
 
+    path_stmt = select(TournamentQualificationPath).where(
+        TournamentQualificationPath.source_tournament_id == tourney.id
+    )
+    qualification_path = (await db.execute(path_stmt)).scalar_one_or_none()
+    next_stage = None
+    if qualification_path:
+        next_stage = (await db.execute(
+            select(Tournament).where(
+                Tournament.id == qualification_path.destination_tournament_id
+            )
+        )).scalar_one_or_none()
+
+    qualified_stmt = select(TournamentParticipant, User).join(
+        User, User.id == TournamentParticipant.user_id
+    ).where(
+        TournamentParticipant.tournament_id == tourney.id,
+        TournamentParticipant.status.in_(["qualified", "winner", "runner_up", "semifinalist"])
+    ).order_by(TournamentParticipant.status.desc(), TournamentParticipant.seed)
+    qualified_players = [
+        {"participant": participant, "user": qualified_user}
+        for participant, qualified_user in (await db.execute(qualified_stmt)).all()
+    ]
+
+    incoming_paths = (await db.execute(
+        select(TournamentQualificationPath, Tournament)
+        .join(Tournament, Tournament.id == TournamentQualificationPath.source_tournament_id)
+        .where(TournamentQualificationPath.destination_tournament_id == tourney.id)
+        .order_by(Tournament.start_time)
+    )).all()
+    feeder_tournaments = []
+    for path, source_tournament in incoming_paths:
+        feeder_qualifiers = (await db.execute(
+            select(User)
+            .join(TournamentParticipant, TournamentParticipant.user_id == User.id)
+            .where(
+                TournamentParticipant.tournament_id == tourney.id,
+                TournamentParticipant.status == "qualified",
+                TournamentParticipant.user_id.in_(
+                    select(TournamentParticipant.user_id).where(
+                        TournamentParticipant.tournament_id == source_tournament.id
+                    )
+                )
+            )
+            .order_by(User.display_name)
+        )).scalars().all()
+        feeder_tournaments.append({
+            "tournament": source_tournament,
+            "players": feeder_qualifiers
+        })
+
+    available_next_stages_stmt = select(Tournament).where(
+        Tournament.id != tourney.id,
+        Tournament.status == "registration_open",
+        Tournament.game_key == tourney.game_key,
+        Tournament.mode == tourney.mode
+    ).order_by(Tournament.start_time)
+    available_next_stages = (await db.execute(available_next_stages_stmt)).scalars().all()
+    can_manage_tournament = bool(
+        user and await user_manages_hub(db, user, tourney.hub_id)
+    )
+
     user_ids = set()
     for m in matches:
         if m.player1_id: user_ids.add(m.player1_id)
@@ -324,6 +391,12 @@ async def page_tournament_detail(
         "tournament": tourney,
         "participants": participants,
         "is_registered": is_registered,
+        "qualification_path": qualification_path,
+        "next_stage": next_stage,
+        "qualified_players": qualified_players,
+        "feeder_tournaments": feeder_tournaments,
+        "available_next_stages": available_next_stages,
+        "can_manage_tournament": can_manage_tournament,
         "rounds": rounds,
         "locale": locale,
         "t": t,
@@ -407,6 +480,63 @@ async def page_passport(
     draw_count = total_matches - win_count - loss_count
     win_rate = round((win_count / total_matches * 100), 1) if total_matches > 0 else 0.0
 
+    recent_match_rows = (await db.execute(
+        select(Match, Tournament.name)
+        .join(Tournament, Tournament.id == Match.tournament_id)
+        .where(*completed_player_match)
+        .order_by(desc(Match.updated_at), desc(Match.created_at))
+        .limit(8)
+    )).all()
+    opponent_ids = {
+        match.player2_id if match.player1_id == player.id else match.player1_id
+        for match, _ in recent_match_rows
+    }
+    opponent_ids.discard(None)
+    opponents = {}
+    if opponent_ids:
+        opponents = {
+            opponent.id: opponent.display_name
+            for opponent in (await db.execute(
+                select(User).where(User.id.in_(opponent_ids))
+            )).scalars().all()
+        }
+
+    recent_match_ids = [match.id for match, _ in recent_match_rows]
+    latest_event_by_match = {}
+    if recent_match_ids:
+        result_events = (await db.execute(
+            select(MatchResultEvent)
+            .where(MatchResultEvent.match_id.in_(recent_match_ids))
+            .order_by(MatchResultEvent.created_at)
+        )).scalars().all()
+        for event in result_events:
+            latest_event_by_match[event.match_id] = event
+
+    recent_matches = []
+    for match, tournament_name in recent_match_rows:
+        opponent_id = match.player2_id if match.player1_id == player.id else match.player1_id
+        event = latest_event_by_match.get(match.id)
+        reason = (event.reason or "").lower() if event else ""
+        if "automated verification via lichess" in reason:
+            verification_label = "Lichess verified"
+        elif "both players submitted agreeing reports" in reason:
+            verification_label = "Player confirmed"
+        elif "captain decision" in reason:
+            verification_label = "Captain reviewed"
+        else:
+            verification_label = "Result recorded"
+
+        recent_matches.append({
+            "id": match.id,
+            "tournament_name": tournament_name,
+            "opponent_name": opponents.get(opponent_id, "Opponent unavailable"),
+            "outcome": "WIN" if match.winner_id == player.id else (
+                "DRAW" if match.winner_id is None else "LOSS"
+            ),
+            "verification_label": verification_label,
+            "played_at": match.updated_at
+        })
+
     history_stmt = select(Tournament).join(
         TournamentParticipant, Tournament.id == TournamentParticipant.tournament_id
     ).where(TournamentParticipant.user_id == player.id).order_by(desc(Tournament.start_time)).limit(5)
@@ -423,6 +553,7 @@ async def page_passport(
         "draw_count": draw_count,
         "win_rate": win_rate,
         "total_matches": total_matches,
+        "recent_matches": recent_matches,
         "tournament_history": tournament_history,
         "locale": locale,
         "t": t,

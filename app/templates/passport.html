@@ -32,6 +32,7 @@
     </div>
     <div class="profile-actions">
       <button type="button" onclick="copyPassportLink(this)" class="btn btn-outline btn-sm" data-copied="{{ t('passport_link_copied', locale) }}" data-copy-error="{{ t('passport_link_copy_failed', locale) }}">{{ t('passport_copy_link', locale) }}</button>
+      <button type="button" onclick="sharePassportLink(this)" class="btn btn-outline btn-sm" data-copied="{{ t('passport_link_copied', locale) }}" data-copy-error="{{ t('passport_link_copy_failed', locale) }}">Share profile</button>
       <a href="/p/{{ player.public_identifier }}/card.png" download class="btn btn-primary btn-sm">{{ t('passport_download_card', locale) }} <span aria-hidden="true">↗</span></a>
     </div>
   </div>
@@ -115,6 +116,28 @@
   </section>
 </div>
 
+<section class="profile-history-section" aria-labelledby="profile-matches-title">
+  <div class="profile-panel-heading">
+    <div>
+      <p class="eyebrow">RECENT RESULTS</p>
+      <h2 id="profile-matches-title">Recent matches</h2>
+    </div>
+    <span class="profile-badge-count">{{ recent_matches | length }} OF {{ total_matches }} MATCHES</span>
+  </div>
+  <div class="profile-history">
+    {% for match in recent_matches %}
+      <a href="/matches/{{ match.id }}" class="profile-history-row profile-match-row">
+        <span class="profile-match-outcome profile-match-{{ match.outcome | lower }}">{{ match.outcome }}</span>
+        <span class="profile-history-name"><strong>vs {{ match.opponent_name }}</strong><small>{{ match.tournament_name }} <span aria-hidden="true">·</span> {{ match.played_at.strftime('%b %d, %Y') }}</small></span>
+        <span class="profile-match-verification">{{ match.verification_label }}</span>
+        <span class="profile-history-arrow" aria-hidden="true">↗</span>
+      </a>
+    {% else %}
+      <p class="profile-empty-history">Completed tournament matches will appear here.</p>
+    {% endfor %}
+  </div>
+</section>
+
 <section class="profile-history-section">
   <div class="profile-panel-heading">
     <div>
@@ -157,6 +180,22 @@ async function copyPassportLink(button) {
   } catch (err) {
     showToast(button.dataset.copyError, 'error');
   }
+}
+
+async function sharePassportLink(button) {
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: document.title,
+        text: 'Check out my GameBridge player passport.',
+        url: window.location.href
+      });
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+    }
+  }
+  await copyPassportLink(button);
 }
 </script>
 {% endblock %}

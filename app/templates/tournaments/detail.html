@@ -52,6 +52,83 @@
   </div>
 </div>
 
+<section class="card" style="margin-bottom: 1.5rem;">
+  <div class="card-header">
+    <h2 class="card-title">Next Competition Stage</h2>
+    {% if qualification_path %}
+      <span class="badge badge-gold">Top 4 advance</span>
+    {% else %}
+      <span class="badge badge-gray">No pathway set</span>
+    {% endif %}
+  </div>
+
+  {% for feeder in feeder_tournaments %}
+    <div style="margin-bottom: 1rem; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 6px;">
+      <p style="color: var(--text-muted); font-size: 0.85rem;">
+        {% if tournament.is_demo %}<span class="badge badge-gold">MOCK DEMO</span> {% endif %}
+        Qualifiers from
+        <a href="/tournaments/{{ feeder.tournament.slug }}" style="color: var(--accent-gold);">{{ feeder.tournament.name }}</a>
+        are registered in this city final.
+      </p>
+      {% if feeder.players %}
+        <p style="margin-top: 0.5rem; font-size: 0.85rem;">
+          {% for player in feeder.players %}
+            <a href="/p/{{ player.public_identifier }}" style="color: var(--text-main);">{{ player.display_name }}</a>{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </p>
+      {% else %}
+        <p style="margin-top: 0.5rem; color: var(--text-muted); font-size: 0.85rem;">
+          Qualifiers will appear here when the linked tournament finishes.
+        </p>
+      {% endif %}
+    </div>
+  {% endfor %}
+
+  {% if qualification_path and next_stage %}
+    <p style="color: var(--text-muted); font-size: 0.9rem;">
+      The top four finishers in this event qualify for
+      <a href="/tournaments/{{ next_stage.slug }}" style="color: var(--accent-gold);">{{ next_stage.name }}</a>
+      in {{ next_stage.city }}. Their places are reserved when this pathway is configured.
+    </p>
+  {% elif can_manage_tournament and tournament.status != 'completed' %}
+    {% if available_next_stages %}
+      <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.75rem;">
+        Connect this event to an open tournament. The top four finishers will be registered automatically when this bracket completes.
+      </p>
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <select id="qualification-destination" class="form-select" style="max-width: 360px;">
+          {% for stage in available_next_stages %}
+            <option value="{{ stage.id }}">{{ stage.name }} — {{ stage.city }} ({{ stage.max_participants }} places)</option>
+          {% endfor %}
+        </select>
+        <button type="button" onclick="configureQualificationPath()" class="btn btn-outline btn-sm">Set top-4 pathway</button>
+      </div>
+    {% else %}
+      <p style="color: var(--text-muted); font-size: 0.9rem;">
+        Create another open tournament for {{ tournament.game_key | upper }} {{ tournament.mode }} to set up the next stage.
+      </p>
+    {% endif %}
+  {% else %}
+    <p style="color: var(--text-muted); font-size: 0.9rem;">
+      This tournament is not linked to a next stage.
+    </p>
+  {% endif %}
+
+  {% if qualified_players %}
+    <div style="margin-top: 1rem;">
+      <h3 style="font-size: 0.95rem; margin-bottom: 0.5rem;">Qualified players</h3>
+      <ol style="padding-left: 1.25rem; color: var(--text-muted);">
+        {% for entry in qualified_players %}
+          <li style="padding: 0.2rem 0;">
+            <a href="/p/{{ entry.user.public_identifier }}" style="color: var(--text-main);">{{ entry.user.display_name }}</a>
+            {% if entry.participant.status == 'winner' %}<span class="badge badge-gold">Champion</span>{% elif entry.participant.status == 'runner_up' %}<span class="badge badge-gray">Runner-up</span>{% elif entry.participant.status == 'semifinalist' %}<span class="badge badge-green">Semifinalist</span>{% else %}<span class="badge badge-green">Qualified</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ol>
+    </div>
+  {% endif %}
+</section>
+
 <!-- Bracket View -->
 <div style="margin-top: 2rem;">
   <h2 style="font-size: 1.3rem; margin-bottom: 1rem;">Single-Elimination Bracket</h2>
@@ -125,6 +202,26 @@ async function startTournament() {
     }
   } catch (e) {
     showToast('Network error while starting tournament.', 'error');
+  }
+}
+
+async function configureQualificationPath() {
+  const destinationId = document.getElementById('qualification-destination').value;
+  try {
+    const res = await fetch('/api/tournaments/{{ tournament.id }}/qualification-path', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destination_tournament_id: destinationId })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('Top-four qualification pathway configured.', 'success');
+      window.location.reload();
+    } else {
+      showToast(data.detail || 'Could not configure pathway.', 'error');
+    }
+  } catch (e) {
+    showToast('Network error while configuring the pathway.', 'error');
   }
 }
 </script>

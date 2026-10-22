@@ -3,7 +3,7 @@ from app.models.user import User, UserPreference
 from app.models.hub import Hub, HubMembership
 from app.models.game import Game, GameAccount, AccountVerification
 from app.models.ratings import RatingSnapshot, PlatformRating
-from app.models.tournament import Tournament, TournamentParticipant
+from app.models.tournament import Tournament, TournamentParticipant, TournamentQualificationPath
 from app.models.match import Match, MatchResultEvent, MatchReport, MatchEvidence
 from app.models.dispute import Dispute, FairPlayFeedback
 from app.models.notification import Notification
@@ -23,6 +23,7 @@ __all__ = [
     "PlatformRating",
     "Tournament",
     "TournamentParticipant",
+    "TournamentQualificationPath",
     "Match",
     "MatchResultEvent",
     "MatchReport",

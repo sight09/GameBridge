@@ -7,7 +7,7 @@ from app.models.user import User, UserPreference
 from app.models.hub import Hub, HubMembership
 from app.models.game import Game, GameAccount, AccountVerification
 from app.models.ratings import PlatformRating, RatingSnapshot
-from app.models.tournament import Tournament, TournamentParticipant
+from app.models.tournament import Tournament, TournamentParticipant, TournamentQualificationPath
 from app.models.match import Match, MatchResultEvent, MatchReport, MatchEvidence
 from app.models.dispute import Dispute
 from app.models.badge import Badge, UserBadge
@@ -66,6 +66,7 @@ class DemoService:
         Deterministically creates demo data isolated with is_demo=True.
         """
         logger.info("Starting demo data seeding...")
+        await DemoService.remove_demo_captain_review_fixture(db)
 
         # 1. Hubs
         hubs_data = [
@@ -306,6 +307,81 @@ class DemoService:
                 reason="Lichess Rapid Final 1-0."
             ))
 
+        # 5b. Completed qualifier linked to an open city final for the pathway walkthrough.
+        if t1 and t1.is_demo and len(created_players) >= 16:
+            qualifier_places = {
+                created_players[3].id: "winner",
+                created_players[1].id: "runner_up",
+                created_players[6].id: "semifinalist",
+                created_players[5].id: "semifinalist",
+            }
+            qualifier_participants = (await db.execute(
+                select(TournamentParticipant).where(
+                    TournamentParticipant.tournament_id == t1.id
+                )
+            )).scalars().all()
+            for participant in qualifier_participants:
+                if participant.user_id in qualifier_places:
+                    participant.status = qualifier_places[participant.user_id]
+
+            final_slug = "addis-city-finals-demo"
+            city_final = (await db.execute(
+                select(Tournament).where(Tournament.slug == final_slug)
+            )).scalar_one_or_none()
+            if city_final and not city_final.is_demo:
+                raise ValueError(
+                    f"Cannot seed demo qualification data: '{final_slug}' belongs to a real tournament."
+                )
+            if not city_final:
+                city_final = Tournament(
+                    name="Addis Ababa City Finals (Demo)",
+                    slug=final_slug,
+                    description="Demo next stage: local cup qualifiers join city-level open entrants.",
+                    game_key="lichess",
+                    mode="rapid",
+                    hub_id=created_hubs[1].id,
+                    city="Addis Ababa",
+                    status="registration_open",
+                    max_participants=12,
+                    start_time=datetime.utcnow() + timedelta(days=10),
+                    registration_deadline=datetime.utcnow() + timedelta(days=9),
+                    created_by_id=captain_user.id,
+                    is_demo=True
+                )
+                db.add(city_final)
+                await db.flush()
+
+            path_stmt = select(TournamentQualificationPath).where(
+                TournamentQualificationPath.source_tournament_id == t1.id
+            )
+            qualification_path = (await db.execute(path_stmt)).scalar_one_or_none()
+            if not qualification_path:
+                db.add(TournamentQualificationPath(
+                    source_tournament_id=t1.id,
+                    destination_tournament_id=city_final.id
+                ))
+            elif qualification_path.destination_tournament_id != city_final.id:
+                raise ValueError(
+                    "The demo qualifier is already linked to a different next-stage tournament."
+                )
+
+            seeded_finalists = [created_players[index] for index in (3, 1, 6, 5)]
+            seeded_finalist_ids = {player.id for player in seeded_finalists}
+            additional_entrants = created_players[8:12]
+            for entrant in seeded_finalists + additional_entrants:
+                existing_participant = (await db.execute(
+                    select(TournamentParticipant).where(
+                        TournamentParticipant.tournament_id == city_final.id,
+                        TournamentParticipant.user_id == entrant.id
+                    )
+                )).scalar_one_or_none()
+                if not existing_participant:
+                    db.add(TournamentParticipant(
+                        tournament_id=city_final.id,
+                        user_id=entrant.id,
+                        status="qualified" if entrant.id in seeded_finalist_ids else "registered"
+                    ))
+
         # 6. Live Tournament: Addis Ababa Weekly Cup #2 (registration open / live)
         t2_slug = "addis-weekly-cup-2"
         t2 = (await db.execute(select(Tournament).where(Tournament.slug == t2_slug))).scalar_one_or_none()
@@ -336,73 +412,7 @@ class DemoService:
                     status="registered"
                 ))
 
-        # 7. Prepared, demo-only dispute for the Hub Captain walkthrough
-        demo_players = [player for player in created_players if player.is_demo][:2]
-        review_slug = "captain-review-demo"
-        review_tournament = (await db.execute(
-            select(Tournament).where(Tournament.slug == review_slug)
-        )).scalar_one_or_none()
-        if not review_tournament and len(demo_players) == 2:
-            review_tournament = Tournament(
-                name="Bole Captain Review Cup",
-                slug=review_slug,
-                description="Demo-only fixture for the captain dispute walkthrough.",
-                game_key="lichess",
-                mode="rapid",
-                hub_id=created_hubs[0].id,
-                city="Addis Ababa",
-                status="in_progress",
-                max_participants=2,
-                start_time=datetime.utcnow() - timedelta(hours=2),
-                registration_deadline=datetime.utcnow() - timedelta(hours=3),
-                created_by_id=captain_user.id,
-                is_demo=True
-            )
-            db.add(review_tournament)
-            await db.flush()
-            for seed, player in enumerate(demo_players, start=1):
-                db.add(TournamentParticipant(
-                    tournament_id=review_tournament.id,
-                    user_id=player.id,
-                    seed=seed,
-                    status="active"
-                ))
-            review_match = Match(
-                tournament_id=review_tournament.id,
-                round_number=1,
-                match_number=1,
-                player1_id=demo_players[0].id,
-                player2_id=demo_players[1].id,
-                status="disputed"
-            )
-            db.add(review_match)
-            await db.flush()
-            db.add_all([
-                MatchReport(
-                    match_id=review_match.id,
-                    reporting_user_id=demo_players[0].id,
-                    claimed_winner_id=demo_players[0].id,
-                    score_p1=1,
-                    score_p2=0,
-                    comments="Demo report: player one claims the win."
-                ),
-                MatchReport(
-                    match_id=review_match.id,
-                    reporting_user_id=demo_players[1].id,
-                    claimed_winner_id=demo_players[1].id,
-                    score_p1=0,
-                    score_p2=1,
-                    comments="Demo report: player two disputes the result."
-                ),
-                Dispute(
-                    match_id=review_match.id,
-                    opened_by_id=demo_players[1].id,
-                    status="open",
-                    reason="Prepared demo dispute: the players submitted conflicting match results."
-                )
-            ])
-
-        # 8. Sample resolved dispute
+        # 7. Sample resolved dispute
         # Create a separate disputed match in finished cup for demonstration
         disputed_m_stmt = select(Match).where(Match.tournament_id == (t1.id if t1 else None)).limit(1)
         demo_match = (await db.execute(disputed_m_stmt)).scalars().first()
@@ -428,8 +438,43 @@ class DemoService:
         return {
             "hubs": len(created_hubs),
             "players": len(created_players),
-            "tournaments": 3 if review_tournament else 2
+            "tournaments": len((await db.execute(
+                select(Tournament.id).where(Tournament.is_demo == True)
+            )).scalars().all())
         }
+
+    @staticmethod
+    async def remove_demo_captain_review_fixture(db: AsyncSession) -> None:
+        """Remove the obsolete demo-only open dispute and its dedicated tournament."""
+        tournament = (await db.execute(
+            select(Tournament).where(
+                Tournament.slug == "captain-review-demo",
+                Tournament.is_demo.is_(True)
+            )
+        )).scalar_one_or_none()
+        if tournament is None:
+            return
+
+        match_ids = (await db.execute(
+            select(Match.id).where(Match.tournament_id == tournament.id)
+        )).scalars().all()
+        if match_ids:
+            await db.execute(delete(Dispute).where(Dispute.match_id.in_(match_ids)))
+            await db.execute(delete(MatchEvidence).where(MatchEvidence.match_id.in_(match_ids)))
+            await db.execute(delete(MatchReport).where(MatchReport.match_id.in_(match_ids)))
+            await db.execute(delete(MatchResultEvent).where(MatchResultEvent.match_id.in_(match_ids)))
+            await db.execute(delete(Match).where(Match.id.in_(match_ids)))
+
+        await db.execute(delete(TournamentParticipant).where(
+            TournamentParticipant.tournament_id == tournament.id
+        ))
+        await db.execute(delete(TournamentQualificationPath).where(
+            (TournamentQualificationPath.source_tournament_id == tournament.id)
+            | (TournamentQualificationPath.destination_tournament_id == tournament.id)
+        ))
+        await db.execute(delete(Tournament).where(Tournament.id == tournament.id))
+        await db.commit()
+        logger.info("Removed obsolete captain-review demo dispute fixture.")
 
     @staticmethod
     async def safe_demo_wipe(db: AsyncSession) -> Dict[str, Any]:
@@ -443,6 +488,10 @@ class DemoService:
         # Tournaments marked is_demo
         demo_tourneys = (await db.execute(select(Tournament.id).where(Tournament.is_demo == True))).scalars().all()
         if demo_tourneys:
+            await db.execute(delete(TournamentQualificationPath).where(
+                (TournamentQualificationPath.source_tournament_id.in_(demo_tourneys))
+                | (TournamentQualificationPath.destination_tournament_id.in_(demo_tourneys))
+            ))
             # Delete matches in these tournaments
             demo_matches = (await db.execute(select(Match.id).where(Match.tournament_id.in_(demo_tourneys)))).scalars().all()
             if demo_matches:

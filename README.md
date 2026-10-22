@@ -22,6 +22,7 @@ GameBridge connects grassroots Ethiopian gamers to an auditable competitive path
 - **Append-Only Match Integrity:** Match outcomes and dispute resolutions are append-only business events with full audit logging.
 - **Platform Elo Rating:** Custom calibrated rating system ($K=40$ for provisional matches, $K=24$ for established players) with Bronze, Silver, Gold, Platinum, and Diamond tiers.
 - **Single-Elimination Bracket Engine:** Automatic power-of-two padding with Byes and automated bracket advancement.
+- **Hub-to-City Qualification Pathways:** Link a local tournament to an open next-stage event; the top four finishers are automatically registered when the bracket completes, with places reserved from public registration.
 - **Public Gamer Passport:** Shareable competitor profiles at `/p/{public_identifier}` with Pillow-generated downloadable PNG share cards.
 - **Hub Captain Dashboard:** Municipal hub management, tournament creation, and dispute resolution queue.
 - **Isolated Demo Dataset & Safe Reset:** Over 40 fictional players, 3 gaming hubs, and historical tournament matches that can be safely wiped and re-seeded without deleting real pilot user records.
@@ -46,8 +47,8 @@ GameBridge connects grassroots Ethiopian gamers to an auditable competitive path
 
 ### 1. Clone & Set Up Virtual Environment
 ```bash
-git clone <repo-url>
-cd game
+git clone https://github.com/juagro2020-art/GameBridge_dev.git
+cd GameBridge_dev
 python -m venv venv
 
 # Windows PowerShell:
@@ -68,7 +69,7 @@ pip install -e .
 ```bash
 python -m scripts.seed_demo
 ```
-This runs table migrations, provisions default games (Lichess, Chess.com) and milestone badges, and seeds 3 hubs, 40 fictional Ethiopian players, a finished cup, an open cup, and a captain-review cup with conflicting demo reports.
+This runs table migrations, provisions default games (Lichess, Chess.com) and milestone badges, and seeds 3 hubs, 40 fictional Ethiopian players, a finished cup, and an open cup. The captain dispute queue starts clear; real disputes are added when players report conflicting results.
 
 ### 4. Start the Application
 ```bash
@@ -96,7 +97,13 @@ Visit **`/judge`** for an interactive, guided walkthrough designed for innovatio
 2. **Minute 2 — Official Account Verification:** Link a Lichess account, receive a random bio code (e.g., `GB-4F7K`), and verify profile ownership via official API.
 3. **Minute 3 — Enter a Tournament:** Join the live *Addis Ababa City Cup #2*, inspect the seeded single-elimination bracket, and enter a Match Room.
 4. **Minute 4 — Match Verification:** Open the direct completed Match Room link to inspect a persisted result event. New live reports require a real Lichess game URL and both players' verified accounts; no simulated success is shown.
-5. **Minute 5 — Trust, Captaincy & Passports:** Sign in as `captain_bole`, inspect the prepared dispute at `/tournaments/captain-review-demo`, resolve it with an audited justification, and inspect the public Gamer Passport (`/p/et-almaz_a`) and share card.
+5. **Minute 5 — Trust, Captaincy & Passports:** Sign in as `captain_bole` and inspect the clear dispute queue at `/captain`. Real disputes appear there when players report conflicting results. Then inspect the public Gamer Passport (`/p/et-almaz_a`) and share card.
+
+### Tournament qualification pathways
+
+A hub captain can configure a pathway from a tournament detail page by selecting an open next-stage tournament for the same game and mode. The top four finishers advance automatically when the source bracket completes; tournaments with fewer than four entrants advance all entrants. The next stage reserves four places for qualifiers and cannot be started while any linked qualifying tournament is unfinished. Finishers are ordered by champion, furthest completed round, then seed.
+
+To see a prefilled mock example locally, start the app with demo mode enabled and open `/judge`. The finished **Bole Grassroots Rapid Cup #1** is linked to **Addis Ababa City Finals (Demo)**. Its four demo qualifiers (Almaz, Selam, Yared, and Tigist) appear on the source cup and as qualified entrants in the city final; four other fictional players are also registered, leaving four open places. All players and results in this walkthrough are fictional demonstration data.
 
 ### Quick Evaluation Logins
 On `/login`, one-click buttons allow instant evaluation as:

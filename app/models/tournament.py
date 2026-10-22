@@ -47,3 +47,12 @@ class TournamentParticipant(Base):
 
     tournament = relationship("Tournament", back_populates="participants")
     user = relationship("User", back_populates="tournament_participations")
+
+
+class TournamentQualificationPath(Base):
+    __tablename__ = "tournament_qualification_paths"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_tournament_id = Column(String(36), nullable=False, unique=True, index=True)
+    destination_tournament_id = Column(String(36), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

@@ -1,16 +1,19 @@
 import pytest
+from datetime import datetime, timedelta
 from sqlalchemy import select
 from app.localization.i18n import i18n, t
 from app.services.user_service import UserService
+from app.services.tournament_service import TournamentService
 from app.services.card_generator import generate_player_share_card
 from app.services.analytics_service import AnalyticsService
 from app.services.demo_service import DemoService
 from app.models.game import GameAccount
 from app.models.dispute import Dispute
 from app.models.hub import Hub, HubMembership
-from app.models.match import Match, MatchReport
+from app.models.match import Match, MatchReport, MatchResultEvent
 from app.models.ratings import PlatformRating
-from app.models.tournament import Tournament
+from app.models.tournament import Tournament, TournamentParticipant, TournamentQualificationPath
+from app.models.user import User
 from app.services.rating_service import RatingService
 from app.auth.dependencies import get_managed_hub_ids, user_manages_hub
 
@@ -84,6 +87,65 @@ async def test_full_e2e_registration_and_analytics(client, db_session):
     assert "match_completion_rate" in metrics
 
 @pytest.mark.asyncio
+async def test_public_passport_shows_recent_match_result_and_share_action(client, db_session):
+    player = await UserService.register_user(
+        db_session, "passport_player", "Passport Player"
+    )
+    opponent = await UserService.register_user(
+        db_session, "passport_opponent", "Passport Opponent"
+    )
+    unrelated_player = await UserService.register_user(
+        db_session, "unrelated_player", "Unrelated Player"
+    )
+    unrelated_opponent = await UserService.register_user(
+        db_session, "unrelated_opponent", "Unrelated Opponent"
+    )
+    tournament = await TournamentService.create_tournament(
+        db=db_session,
+        name="Passport Showcase Cup",
+        game_key="lichess",
+        mode="rapid",
+        city="Addis Ababa",
+        start_time=datetime.utcnow() + timedelta(hours=2),
+        registration_deadline=datetime.utcnow() + timedelta(hours=1),
+    )
+
+    player_match = Match(
+        tournament_id=tournament.id,
+        player1_id=player.id,
+        player2_id=opponent.id,
+        winner_id=player.id,
+        status="completed",
+    )
+    unrelated_match = Match(
+        tournament_id=tournament.id,
+        player1_id=unrelated_player.id,
+        player2_id=unrelated_opponent.id,
+        winner_id=unrelated_opponent.id,
+        status="completed",
+    )
+    db_session.add_all([player_match, unrelated_match])
+    await db_session.flush()
+    db_session.add(MatchResultEvent(
+        match_id=player_match.id,
+        outcome="player1_win",
+        winner_id=player.id,
+        reason="Automated verification via Lichess API export.",
+    ))
+    await db_session.commit()
+
+    response = await client.get(f"/p/{player.public_identifier}")
+
+    assert response.status_code == 200
+    assert "Recent matches" in response.text
+    assert "vs Passport Opponent" in response.text
+    assert "Passport Showcase Cup" in response.text
+    assert "Lichess verified" in response.text
+    assert "profile-match-win" in response.text
+    assert "Unrelated Opponent" not in response.text
+    assert "sharePassportLink(this)" in response.text
+
+@pytest.mark.asyncio
 async def test_leaderboard_renders_ranked_player_cards(client, db_session):
     await UserService.register_user(db_session, "ranking_ui_player", "Ranking UI Player")
 
@@ -99,8 +161,9 @@ async def test_homepage_renders_competitive_lobby(client):
     response = await client.get("/")
 
     assert response.status_code == 200
-    assert "ETHIOPIA'S COMPETITIVE PLAYER HUB" in response.text
-    assert "YOUR NEXT LEVEL" in response.text
+    assert "Every match" in response.text
+    assert "Players setting the pace" in response.text
+    assert "Choose your next match" in response.text
 
 @pytest.mark.asyncio
 async def test_demo_safe_reset_isolation(db_session):
@@ -124,24 +187,101 @@ async def test_demo_safe_reset_isolation(db_session):
     assert found_real.display_name == "Real Pilot Gamer"
 
 @pytest.mark.asyncio
-async def test_demo_seed_includes_captain_review_dispute(db_session):
+async def test_demo_seed_removes_obsolete_captain_review_dispute(db_session):
     await DemoService.seed_demo_data(db_session)
 
-    dispute = (await db_session.execute(
-        select(Dispute).where(Dispute.status == "open")
+    tournament = Tournament(
+        name="Obsolete Captain Review Cup",
+        slug="captain-review-demo",
+        game_key="lichess",
+        mode="rapid",
+        hub_id=(await db_session.execute(
+            select(Hub.id).where(Hub.slug == "bole-hub")
+        )).scalar_one(),
+        city="Addis Ababa",
+        status="in_progress",
+        max_participants=2,
+        start_time=datetime.utcnow(),
+        registration_deadline=datetime.utcnow(),
+        is_demo=True
+    )
+    players = (await db_session.execute(
+        select(User).where(User.is_demo.is_(True)).limit(2)
+    )).scalars().all()
+    tournament.created_by_id = players[0].id
+    db_session.add(tournament)
+    await db_session.flush()
+
+    match = Match(
+        tournament_id=tournament.id,
+        player1_id=players[0].id,
+        player2_id=players[1].id,
+        status="disputed"
+    )
+    db_session.add(match)
+    await db_session.flush()
+    db_session.add(Dispute(
+        match_id=match.id,
+        opened_by_id=players[1].id,
+        status="open",
+        reason="Prepared demo dispute: the players submitted conflicting match results."
+    ))
+    await db_session.commit()
+
+    await DemoService.seed_demo_data(db_session)
+
+    assert (await db_session.execute(
+        select(Tournament).where(Tournament.slug == "captain-review-demo")
+    )).scalar_one_or_none() is None
+    assert (await db_session.execute(
+        select(Dispute).where(Dispute.match_id == match.id)
+    )).scalar_one_or_none() is None
+
+@pytest.mark.asyncio
+async def test_demo_seed_shows_mock_top_four_pathway(client, db_session):
+    await DemoService.seed_demo_data(db_session)
+    await DemoService.seed_demo_data(db_session)
+
+    source = (await db_session.execute(
+        select(Tournament).where(Tournament.slug == "bole-grassroots-cup-1")
     )).scalar_one()
-    match = (await db_session.execute(select(Match).where(Match.id == dispute.match_id))).scalar_one()
-    tournament = (await db_session.execute(
-        select(Tournament).where(Tournament.id == match.tournament_id)
+    city_final = (await db_session.execute(
+        select(Tournament).where(Tournament.slug == "addis-city-finals-demo")
     )).scalar_one()
-    reports = (await db_session.execute(
-        select(MatchReport).where(MatchReport.match_id == match.id)
+    path = (await db_session.execute(
+        select(TournamentQualificationPath).where(
+            TournamentQualificationPath.source_tournament_id == source.id
+        )
+    )).scalar_one()
+    qualified = (await db_session.execute(
+        select(TournamentParticipant).where(
+            TournamentParticipant.tournament_id == city_final.id,
+            TournamentParticipant.status == "qualified"
+        )
     )).scalars().all()
 
-    assert match.status == "disputed"
-    assert tournament.slug == "captain-review-demo"
-    assert tournament.is_demo
-    assert len(reports) == 2
+    assert path.destination_tournament_id == city_final.id
+    assert len(qualified) == 4
+    assert city_final.max_participants == 12
+    city_final_participants = (await db_session.execute(
+        select(TournamentParticipant).where(
+            TournamentParticipant.tournament_id == city_final.id
+        )
+    )).scalars().all()
+    assert len(city_final_participants) == 8
+
+    source_page = await client.get(f"/tournaments/{source.slug}")
+    final_page = await client.get(f"/tournaments/{city_final.slug}")
+
+    assert source_page.status_code == 200
+    assert "Top 4 advance" in source_page.text
+    assert "Almaz Assefa" in source_page.text
+    assert "Selam Tadesse" in source_page.text
+    assert final_page.status_code == 200
+    assert "MOCK DEMO" in final_page.text
+    assert "Qualifiers from" in final_page.text
+    assert "Addis Ababa City Finals (Demo)" in final_page.text
+    assert "Almaz Assefa" in final_page.text
 
 @pytest.mark.asyncio
 async def test_game_account_verification_is_owner_scoped(db_session):

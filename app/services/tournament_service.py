@@ -2,14 +2,95 @@ import secrets
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
-from app.models.tournament import Tournament, TournamentParticipant
+from sqlalchemy import select, desc, func
+from app.models.tournament import Tournament, TournamentParticipant, TournamentQualificationPath
 from app.models.match import Match
 from app.models.ratings import PlatformRating
 from app.tournaments.bracket import build_single_elimination_bracket
 from app.utils.logger import logger
 
 class TournamentService:
+    QUALIFICATION_SLOTS = 4
+
+    @staticmethod
+    async def _reserved_qualification_slots(db: AsyncSession, tournament_id: str) -> int:
+        paths = (await db.execute(
+            select(TournamentQualificationPath)
+            .join(Tournament, Tournament.id == TournamentQualificationPath.source_tournament_id)
+            .where(
+                TournamentQualificationPath.destination_tournament_id == tournament_id,
+                Tournament.status != "completed"
+            )
+        )).scalars().all()
+        return len(paths) * TournamentService.QUALIFICATION_SLOTS
+
+    @staticmethod
+    async def link_qualification_path(
+        db: AsyncSession,
+        source_tournament_id: str,
+        destination_tournament_id: str
+    ) -> TournamentQualificationPath:
+        if source_tournament_id == destination_tournament_id:
+            raise ValueError("A tournament cannot qualify players into itself.")
+
+        source = (await db.execute(
+            select(Tournament).where(Tournament.id == source_tournament_id)
+        )).scalar_one_or_none()
+        destination = (await db.execute(
+            select(Tournament).where(Tournament.id == destination_tournament_id)
+        )).scalar_one_or_none()
+        if not source or not destination:
+            raise ValueError("Source and destination tournaments must both exist.")
+        if source.status == "completed":
+            raise ValueError("A completed tournament cannot be linked to a qualification stage.")
+        if destination.status != "registration_open":
+            raise ValueError("The next-stage tournament must be open for registration.")
+        if (source.game_key, source.mode) != (destination.game_key, destination.mode):
+            raise ValueError("Qualification tournaments must use the same game and mode.")
+
+        existing = (await db.execute(
+            select(TournamentQualificationPath).where(
+                TournamentQualificationPath.source_tournament_id == source_tournament_id
+            )
+        )).scalar_one_or_none()
+        if existing:
+            raise ValueError("This tournament already has a configured next stage.")
+
+        next_stage_id = destination_tournament_id
+        visited = {source_tournament_id}
+        while True:
+            if next_stage_id in visited:
+                raise ValueError("This qualification link would create a tournament pathway cycle.")
+            visited.add(next_stage_id)
+            next_path = (await db.execute(
+                select(TournamentQualificationPath).where(
+                    TournamentQualificationPath.source_tournament_id == next_stage_id
+                )
+            )).scalar_one_or_none()
+            if not next_path:
+                break
+            next_stage_id = next_path.destination_tournament_id
+
+        destination_count = (await db.execute(
+            select(func.count(TournamentParticipant.id)).where(
+                TournamentParticipant.tournament_id == destination_tournament_id
+            )
+        )).scalar_one()
+        reserved_slots = await TournamentService._reserved_qualification_slots(
+            db, destination_tournament_id
+        )
+        if destination_count + reserved_slots + TournamentService.QUALIFICATION_SLOTS > destination.max_participants:
+            raise ValueError("The next-stage tournament needs four available places for qualifiers.")
+
+        path = TournamentQualificationPath(
+            source_tournament_id=source_tournament_id,
+            destination_tournament_id=destination_tournament_id
+        )
+        db.add(path)
+        await db.commit()
+        await db.refresh(path)
+        return path
+
     @staticmethod
     async def create_tournament(
         db: AsyncSession,
@@ -77,9 +158,13 @@ class TournamentService:
             raise ValueError("Player is already registered for this tournament.")
 
         # Check capacity
-        count_stmt = select(TournamentParticipant).where(TournamentParticipant.tournament_id == tournament_id)
-        current_count = len((await db.execute(count_stmt)).all())
-        if current_count >= tourney.max_participants:
+        current_count = (await db.execute(
+            select(func.count(TournamentParticipant.id)).where(
+                TournamentParticipant.tournament_id == tournament_id
+            )
+        )).scalar_one()
+        reserved_slots = await TournamentService._reserved_qualification_slots(db, tournament_id)
+        if current_count + reserved_slots >= tourney.max_participants:
             raise ValueError("Tournament has reached maximum participant capacity.")
 
         participant = TournamentParticipant(
@@ -103,6 +188,17 @@ class TournamentService:
             raise ValueError("Tournament not found.")
         if tourney.status != "registration_open":
             raise ValueError(f"Tournament cannot be started from status '{tourney.status}'.")
+
+        pending_feeders = (await db.execute(
+            select(TournamentQualificationPath)
+            .join(Tournament, Tournament.id == TournamentQualificationPath.source_tournament_id)
+            .where(
+                TournamentQualificationPath.destination_tournament_id == tournament_id,
+                Tournament.status != "completed"
+            )
+        )).scalars().first()
+        if pending_feeders:
+            raise ValueError("Wait for all linked qualifying tournaments to finish before starting this stage.")
 
         # Fetch participants
         part_stmt = select(TournamentParticipant).where(TournamentParticipant.tournament_id == tournament_id)

@@ -1,9 +1,9 @@
-const CACHE_NAME = 'gamebridge-static-v9';
+const CACHE_NAME = 'gamebridge-static-v18';
 const STATIC_ASSETS = [
   '/',
-  '/static/css/style.css?v=9',
+  '/static/css/style.css?v=20',
   '/static/js/htmx.min.js',
-  '/static/js/app.js?v=2',
+  '/static/js/app.js?v=10',
   '/static/manifest.json',
   '/offline'
 ];

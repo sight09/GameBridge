@@ -1,92 +1,122 @@
 {% extends "base.html" %}
 
 {% block content %}
-<section class="hero hero-home">
-  <div class="hero-copy">
-    <span class="home-lobby-label"><i class="signal-dot" aria-hidden="true"></i> ETHIOPIA'S COMPETITIVE PLAYER HUB</span>
-    <p class="eyebrow">{{ t('home_eyebrow', locale) }}</p>
-    <h1>{{ t('hero_title', locale) }}</h1>
-    <p class="hero-description">{{ t('hero_subtitle', locale) }}</p>
-    <div class="hero-actions">
-      <a href="/tournaments" class="btn btn-primary">{{ t('nav_tournaments', locale) }}<span aria-hidden="true">&#8594;</span></a>
-      {% if not current_user %}
-        <a href="/register" class="btn btn-outline">{{ t('nav_register', locale) }}</a>
-      {% else %}
-        <a href="/dashboard" class="btn btn-outline">{{ t('nav_dashboard', locale) }}</a>
-      {% endif %}
-    </div>
-    <div class="hero-signals">
-      <span><i class="signal-dot" aria-hidden="true"></i> {{ t('home_verified_results', locale) }}</span>
-      <span>{{ t('home_city_rankings', locale) }}</span>
-      <span>{{ t('home_public_passports', locale) }}</span>
-    </div>
-    <div class="home-proof-strip">
-      <span><strong>01</strong> REAL MATCHES</span>
-      <span><strong>02</strong> LOCAL CUPS</span>
-      <span><strong>03</strong> YOUR NEXT LEVEL</span>
-    </div>
-  </div>
-
-  <div class="hero-showcase" aria-label="{{ t('nav_leaderboards', locale) }}">
-    <div class="showcase-header">
-      <span class="live-indicator"><i class="signal-dot" aria-hidden="true"></i> {{ t('home_national_ladder', locale) }}</span>
-      <span class="showcase-mode">LICHESS / RAPID</span>
-    </div>
-    <div class="showcase-title-row">
-      <div>
-        <p class="showcase-kicker">{{ t('label_elo', locale) }}</p>
-        <h2>{{ t('home_top_competitors', locale) }}</h2>
+<div class="home-command">
+  <section class="command-hero">
+    <div class="command-copy">
+      <p class="command-kicker"><i class="signal-dot" aria-hidden="true"></i> ETHIOPIA · COMPETITIVE GAMING</p>
+      <h1>Every match<br>moves you <span>forward.</span></h1>
+      <p class="command-intro">Find your next tournament, prove your skill, and build a name on Ethiopia's competitive ladder.</p>
+      <div class="command-actions">
+        <a href="/tournaments" class="btn btn-primary">{{ t('nav_tournaments', locale) }} <span aria-hidden="true">↗</span></a>
+        {% if current_user %}
+          <a href="/dashboard" class="btn btn-outline">{{ t('nav_dashboard', locale) }}</a>
+        {% else %}
+          <a href="/register" class="btn btn-outline">{{ t('nav_register', locale) }}</a>
+        {% endif %}
       </div>
-      <a href="/leaderboards" class="text-link">{{ t('nav_leaderboards', locale) }} <span aria-hidden="true">&#8599;</span></a>
+      <div class="command-proof">
+        <span><i class="signal-dot" aria-hidden="true"></i> VERIFIED RESULTS</span>
+        <span>LOCAL CUPS</span>
+        <span>PLAYER PASSPORTS</span>
+      </div>
     </div>
-    <div class="showcase-players">
-      {% for player in featured_players %}
-        <a class="showcase-player{% if player.rank == 1 %} is-leader{% endif %}" href="/p/{{ player.public_identifier }}">
-          <span class="showcase-rank">{{ '%02d' | format(player.rank) }}</span>
-          <span class="player-monogram" aria-hidden="true">{{ player.display_name[:1] | upper }}</span>
-          <span class="showcase-player-name"><strong>{{ player.display_name }}</strong><small>{{ player.city }}{% if player.is_demo %} · DEMO{% endif %}</small></span>
-          <span class="showcase-rating"><strong>{{ player.elo | int }}</strong><small>{{ player.tier }}</small></span>
+
+    <div class="command-arena" data-tilt>
+      <div class="command-arena-top">
+        <span class="command-overline">NEXT ON THE ARENA</span>
+        {% if featured_tournaments %}
+          {% set featured_event = featured_tournaments[0] %}
+          <span class="command-event-status{% if featured_event.status == 'in_progress' %} is-live{% endif %}">
+            <i class="signal-dot" aria-hidden="true"></i> {{ featured_event.status | replace('_', ' ') | upper }}
+          </span>
+        {% endif %}
+      </div>
+      {% if featured_tournaments %}
+        <a class="command-featured-event" href="/tournaments/{{ featured_event.slug }}">
+          <span class="command-event-art" aria-hidden="true">
+            <span class="command-event-orbit"></span>
+            <span class="command-event-mark">GB<span>ARENA</span></span>
+            <span class="command-event-coordinate">ADDIS ABABA · ETHIOPIA</span>
+          </span>
+          <span class="command-event-details">
+            <span class="command-event-game">{{ featured_event.game_key | upper }} <i>·</i> {{ featured_event.mode | title }}</span>
+            <strong>{{ featured_event.name }}</strong>
+            <span class="command-event-location">{{ featured_event.city }}</span>
+            <span class="command-event-cta">View tournament <b aria-hidden="true">↗</b></span>
+          </span>
         </a>
       {% else %}
-        <div class="showcase-empty">{{ t('home_empty_players', locale) }}</div>
+        <div class="command-empty-event">
+          <span class="command-empty-mark">GB</span>
+          <strong>Your next match starts here.</strong>
+          <p>Explore tournaments and find your next challenge.</p>
+          <a href="/tournaments">Browse all tournaments ↗</a>
+        </div>
+      {% endif %}
+      <div class="command-arena-foot">
+        <span><i class="signal-dot" aria-hidden="true"></i> GAMEBRIDGE COMPETITION HUB</span>
+        <a href="/tournaments">ALL EVENTS <b aria-hidden="true">↗</b></a>
+      </div>
+    </div>
+  </section>
+
+  <section class="command-rank-section" aria-labelledby="command-ranks-title">
+    <div class="command-section-heading">
+      <div><p class="eyebrow">THE LADDER</p><h2 id="command-ranks-title">Players setting the pace</h2></div>
+      <a class="text-link" href="/leaderboards">View leaderboard <span aria-hidden="true">↗</span></a>
+    </div>
+    <div class="command-rank-grid">
+      {% for player in featured_players %}
+        <a class="command-rank-card{% if player.rank == 1 %} is-top-ranked{% endif %}" href="/p/{{ player.public_identifier }}">
+          <span class="command-rank-number">#{{ '%02d' | format(player.rank) }}</span>
+          <span class="command-rank-avatar" aria-hidden="true">{{ player.display_name[:1] | upper }}</span>
+          <span class="command-rank-info"><strong>{{ player.display_name }}</strong><small>{{ player.city }}{% if player.is_demo %} · DEMO{% endif %}</small></span>
+          <span class="command-rank-score"><strong>{{ player.elo | int }}</strong><small>{{ player.tier }}</small></span>
+          <span class="command-rank-arrow" aria-hidden="true">↗</span>
+        </a>
+      {% else %}
+        <p class="command-empty-ranks">{{ t('home_empty_players', locale) }}</p>
       {% endfor %}
     </div>
-    <div class="showcase-footer"><span>{{ t('home_ratings_source', locale) }}</span><a href="/leaderboards">VIEW ALL RANKS <span aria-hidden="true">↗</span></a></div>
-  </div>
-</section>
+  </section>
 
-<section class="home-section competitions-section">
-  <div class="section-heading">
-    <div><p class="eyebrow">{{ t('home_play_next_round', locale) }}</p><h2>{{ t('nav_tournaments', locale) }}</h2></div>
-    <a class="text-link" href="/tournaments">{{ t('nav_tournaments', locale) }} <span aria-hidden="true">&#8594;</span></a>
-  </div>
-  <div class="competition-list">
-    {% for tournament in featured_tournaments %}
-      <a class="competition-row" href="/tournaments/{{ tournament.slug }}">
-        <span class="competition-mark" aria-hidden="true">{{ '%02d' | format(loop.index) }}</span>
-        <span class="competition-main"><strong>{{ tournament.name }}</strong><small>{{ tournament.city }} · {{ tournament.game_key | upper }} / {{ tournament.mode | title }}</small></span>
-        <span class="badge {% if tournament.status == 'in_progress' %}badge-green{% else %}badge-gold{% endif %}">{{ tournament.status | replace('_', ' ') | title }}</span>
-        <span class="row-arrow" aria-hidden="true">&#8599;</span>
-      </a>
-    {% else %}
-      <div class="empty-state">{{ t('home_empty_tournaments', locale) }}</div>
-    {% endfor %}
-  </div>
-</section>
+  <section class="command-events-section" aria-labelledby="command-events-title">
+    <div class="command-section-heading">
+      <div><p class="eyebrow">{{ t('home_play_next_round', locale) }}</p><h2 id="command-events-title">Choose your next match</h2></div>
+      <a class="text-link" href="/tournaments">All tournaments <span aria-hidden="true">↗</span></a>
+    </div>
+    <div class="command-event-grid">
+      {% for tournament in featured_tournaments %}
+        <a class="command-event-card" href="/tournaments/{{ tournament.slug }}">
+          <span class="command-event-card-top">
+            <span class="command-event-card-index">{{ '%02d' | format(loop.index) }}</span>
+            {% if tournament.status == 'in_progress' %}
+              <span class="command-event-card-status is-live"><i class="signal-dot" aria-hidden="true"></i> LIVE</span>
+            {% else %}
+              <span class="command-event-card-status">REGISTRATION OPEN</span>
+            {% endif %}
+          </span>
+          <span class="command-event-card-game">{{ tournament.game_key | upper }} <i>·</i> {{ tournament.mode | title }}</span>
+          <strong>{{ tournament.name }}</strong>
+          <span class="command-event-card-bottom"><span>{{ tournament.city }}</span><b aria-hidden="true">↗</b></span>
+        </a>
+      {% else %}
+        <div class="empty-state">{{ t('home_empty_tournaments', locale) }}</div>
+      {% endfor %}
+    </div>
+  </section>
 
-<section class="home-section pathway-section">
-  <div class="section-heading"><div><p class="eyebrow">{{ t('home_pathway_eyebrow', locale) }}</p><h2>{{ t('pathway_title', locale) }}</h2></div></div>
-  <div class="pathway-grid">
-    <a class="pathway-step is-live" href="/tournaments"><span class="pathway-index">01</span><span class="pathway-copy"><strong>{{ t('pathway_grassroots', locale) }}</strong><small>{{ t('pathway_grassroots_desc', locale) }}</small></span><span class="pathway-state">{{ t('home_live', locale) }}</span></a>
-    <a class="pathway-step is-live" href="/leaderboards"><span class="pathway-index">02</span><span class="pathway-copy"><strong>{{ t('pathway_city', locale) }}</strong><small>{{ t('pathway_city_desc', locale) }}</small></span><span class="pathway-state">{{ t('home_live', locale) }}</span></a>
-    <div class="pathway-step is-planned"><span class="pathway-index">03</span><span class="pathway-copy"><strong>{{ t('pathway_regional', locale) }}</strong><small>{{ t('pathway_regional_desc', locale) }}</small></span><span class="pathway-state">{{ t('home_planned', locale) }}</span></div>
-    <div class="pathway-step is-planned"><span class="pathway-index">04</span><span class="pathway-copy"><strong>{{ t('pathway_national', locale) }}</strong><small>{{ t('pathway_national_desc', locale) }}</small></span><span class="pathway-state">{{ t('home_planned', locale) }}</span></div>
-  </div>
-</section>
-
-<section class="integration-strip" aria-label="Supported integrations">
-  <span class="eyebrow">{{ t('home_supported_titles', locale) }}</span>
-  <div><strong>Lichess</strong><span>{{ t('home_lichess_features', locale) }}</span></div>
-  <div><strong>Chess.com</strong><span>{{ t('home_chesscom_features', locale) }}</span></div>
-</section>
+  <section class="command-path-section" aria-labelledby="command-path-title">
+    <div class="command-section-heading">
+      <div><p class="eyebrow">{{ t('home_pathway_eyebrow', locale) }}</p><h2 id="command-path-title">{{ t('pathway_title', locale) }}</h2></div>
+    </div>
+    <div class="command-pathway">
+      <a class="command-path-step is-live" href="/tournaments"><span>01</span><strong>{{ t('pathway_grassroots', locale) }}</strong><small>{{ t('pathway_grassroots_desc', locale) }}</small><i>{{ t('home_live', locale) }} ↗</i></a>
+      <a class="command-path-step is-live" href="/leaderboards"><span>02</span><strong>{{ t('pathway_city', locale) }}</strong><small>{{ t('pathway_city_desc', locale) }}</small><i>{{ t('home_live', locale) }} ↗</i></a>
+      <div class="command-path-step"><span>03</span><strong>{{ t('pathway_regional', locale) }}</strong><small>{{ t('pathway_regional_desc', locale) }}</small><i>{{ t('home_planned', locale) }}</i></div>
+      <div class="command-path-step"><span>04</span><strong>{{ t('pathway_national', locale) }}</strong><small>{{ t('pathway_national_desc', locale) }}</small><i>{{ t('home_planned', locale) }}</i></div>
+    </div>
+  </section>
+</div>
 {% endblock %}

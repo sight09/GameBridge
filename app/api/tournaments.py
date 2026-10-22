@@ -6,11 +6,41 @@ from app.models.tournament import Tournament, TournamentParticipant
 from app.models.match import Match
 from app.models.user import User
 from app.models.hub import Hub, HubMembership
-from app.schemas.tournament import TournamentCreate
+from app.schemas.tournament import TournamentCreate, TournamentQualificationPathCreate
 from app.services.tournament_service import TournamentService
 from app.auth.dependencies import get_current_user, require_captain, user_manages_hub
 
 router = APIRouter(prefix="/api/tournaments", tags=["tournaments"])
+
+@router.post("/{tournament_id}/qualification-path")
+async def configure_qualification_path(
+    tournament_id: str,
+    data: TournamentQualificationPathCreate,
+    db: AsyncSession = Depends(get_db),
+    captain: User = Depends(require_captain)
+):
+    source = (await db.execute(
+        select(Tournament).where(Tournament.id == tournament_id)
+    )).scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="Tournament not found.")
+    if not await user_manages_hub(db, captain, source.hub_id):
+        raise HTTPException(status_code=403, detail="You can only configure qualification for tournaments in your assigned hub.")
+
+    try:
+        path = await TournamentService.link_qualification_path(
+            db=db,
+            source_tournament_id=source.id,
+            destination_tournament_id=data.destination_tournament_id
+        )
+        return {
+            "success": True,
+            "source_tournament_id": path.source_tournament_id,
+            "destination_tournament_id": path.destination_tournament_id,
+            "qualifying_places": TournamentService.QUALIFICATION_SLOTS
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("")
 async def list_tournaments(db: AsyncSession = Depends(get_db)):

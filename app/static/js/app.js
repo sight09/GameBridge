@@ -22,6 +22,57 @@ function showToast(message, tone = 'success') {
   toastTimeoutId = window.setTimeout(() => { toast.hidden = true; }, 4200);
 }
 
+function initializeGameMotion() {
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reducedMotion) return;
+
+  const revealElements = document.querySelectorAll(
+    '.command-rank-section, .command-rank-card, .command-events-section, .command-event-card, .command-path-section, .command-path-step'
+  );
+  if ('IntersectionObserver' in window) {
+    const revealObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('motion-visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12 });
+
+    revealElements.forEach((element, index) => {
+      element.classList.add('motion-reveal');
+      element.style.setProperty('--reveal-delay', `${Math.min(index % 4, 3) * 75}ms`);
+      revealObserver.observe(element);
+    });
+  }
+
+  const finePointer = window.matchMedia('(hover: hover) and (pointer: fine)');
+  if (!finePointer.matches) return;
+
+  document.querySelectorAll('[data-tilt], .command-rank-card, .command-event-card, .command-path-step[href]').forEach((card) => {
+    const isShowcase = card.matches('[data-tilt]');
+    card.addEventListener('pointermove', (event) => {
+      const bounds = card.getBoundingClientRect();
+      const x = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+      const y = Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height));
+      card.style.setProperty('--glow-x', `${x * 100}%`);
+      card.style.setProperty('--glow-y', `${y * 100}%`);
+      const tiltStrength = isShowcase ? 14 : 5;
+      card.style.setProperty('--tilt-x', `${(x - 0.5) * tiltStrength}deg`);
+      card.style.setProperty('--tilt-y', `${(0.5 - y) * tiltStrength}deg`);
+    });
+
+    card.addEventListener('pointerleave', () => {
+      card.style.setProperty('--glow-x', '50%');
+      card.style.setProperty('--glow-y', '0%');
+      card.style.setProperty('--tilt-x', '0deg');
+      card.style.setProperty('--tilt-y', '0deg');
+    });
+  });
+}
+
+initializeGameMotion();
+
 // 1. Service Worker Registration
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

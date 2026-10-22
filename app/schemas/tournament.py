@@ -32,3 +32,7 @@ class TournamentOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TournamentQualificationPathCreate(BaseModel):
+    destination_tournament_id: str = Field(..., min_length=1, max_length=36)

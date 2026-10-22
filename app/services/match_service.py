@@ -1,14 +1,15 @@
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, func
 from app.models.match import Match, MatchResultEvent, MatchReport, MatchEvidence
-from app.models.tournament import Tournament, TournamentParticipant
+from app.models.tournament import Tournament, TournamentParticipant, TournamentQualificationPath
 from app.models.game import GameAccount
 from app.models.dispute import Dispute
 from app.adapters.lichess import LichessAdapter
 from app.services.rating_service import RatingService
 from app.services.badge_service import BadgeService
+from app.services.tournament_service import TournamentService
 from app.utils.logger import logger
 
 class MatchService:
@@ -268,3 +269,79 @@ class MatchService:
                     winner_part.status = "winner"
                 # Award City Cup Champion badge!
                 await BadgeService.award_badge(db, winner_id, "city_champion")
+                await MatchService._advance_top_qualifiers(db, tourney, winner_id)
+
+    @staticmethod
+    async def _advance_top_qualifiers(
+        db: AsyncSession,
+        source: Tournament,
+        winner_id: str
+    ) -> None:
+        path = (await db.execute(
+            select(TournamentQualificationPath).where(
+                TournamentQualificationPath.source_tournament_id == source.id
+            )
+        )).scalar_one_or_none()
+        if not path:
+            return
+
+        destination = (await db.execute(
+            select(Tournament).where(Tournament.id == path.destination_tournament_id)
+        )).scalar_one_or_none()
+        if not destination or destination.status != "registration_open":
+            raise ValueError("The linked next-stage tournament is not open for qualification.")
+
+        participants = (await db.execute(
+            select(TournamentParticipant)
+            .where(TournamentParticipant.tournament_id == source.id)
+            .order_by(TournamentParticipant.seed, TournamentParticipant.registered_at)
+        )).scalars().all()
+        matches = (await db.execute(
+            select(Match).where(
+                Match.tournament_id == source.id,
+                Match.status == "completed"
+            )
+        )).scalars().all()
+
+        furthest_round = {}
+        for completed_match in matches:
+            for player_id in (completed_match.player1_id, completed_match.player2_id):
+                if player_id:
+                    furthest_round[player_id] = max(
+                        furthest_round.get(player_id, 0),
+                        completed_match.round_number
+                    )
+
+        participants.sort(key=lambda participant: (
+            participant.user_id != winner_id,
+            -furthest_round.get(participant.user_id, 0),
+            participant.seed if participant.seed is not None else float("inf"),
+            participant.registered_at
+        ))
+        qualifiers = participants[:TournamentService.QUALIFICATION_SLOTS]
+
+        existing_ids = set((await db.execute(
+            select(TournamentParticipant.user_id).where(
+                TournamentParticipant.tournament_id == destination.id,
+                TournamentParticipant.user_id.in_([p.user_id for p in qualifiers])
+            )
+        )).scalars().all()) if qualifiers else set()
+        destination_count = (await db.execute(
+            select(func.count(TournamentParticipant.id)).where(
+                TournamentParticipant.tournament_id == destination.id
+            )
+        )).scalar_one()
+        new_qualifiers = [p for p in qualifiers if p.user_id not in existing_ids]
+        if destination_count + len(new_qualifiers) > destination.max_participants:
+            raise ValueError("The next-stage tournament no longer has room for all qualifiers.")
+
+        for place, participant in enumerate(qualifiers, start=1):
+            participant.status = "winner" if place == 1 else "qualified"
+            if participant.user_id not in existing_ids:
+                db.add(TournamentParticipant(
+                    tournament_id=destination.id,
+                    user_id=participant.user_id,
+                    status="qualified"
+                ))
+
+        await db.flush()
